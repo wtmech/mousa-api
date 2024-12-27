@@ -38,22 +38,13 @@ router.post('/upload', auth, upload.single('track'), async (req, res) => {
       return res.status(403).json({ message: 'Only artists can upload tracks' });
     }
 
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
-
-    const tags = NodeID3.read(req.file.path);
-    const stats = fs.statSync(req.file.path);
-    const durationInSeconds = Math.floor(stats.size / (128 * 1024 / 8));
-
     const trackData = {
-      title: req.body.title || tags.title || path.parse(req.file.originalname).name,
+      title: req.body.title,
       artistName: req.user.artistName || req.user.username,
       uploadedBy: req.user._id,
-      album: req.body.album || tags.album,
-      duration: durationInSeconds,
+      album: req.body.album,
+      genre: req.body.genre,
       fileUrl: `/music/tracks/${req.file.filename}`,
-      genre: req.body.genre || tags.genre,
       distributor: 'artist',
       isExclusive: req.body.isExclusive === 'false' ? false : true,
       allowDownload: req.body.allowDownload === 'true'
@@ -64,7 +55,6 @@ router.post('/upload', auth, upload.single('track'), async (req, res) => {
 
     res.status(201).json(track);
   } catch (error) {
-    console.error('Upload error:', error);
     res.status(500).json({ message: error.message });
   }
 });

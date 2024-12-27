@@ -8,7 +8,33 @@ const auth = require('../middleware/auth');
 // Register a new user
 router.post('/register', async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    console.log('Received registration request body:', req.body);
+    const { firstName, lastName, username, email, password } = req.body;
+
+    // Log extracted values
+    console.log('Extracted values:', { firstName, lastName, username, email, password: '***' });
+
+    // Validate all required fields
+    if (!firstName || !lastName || !username || !email || !password) {
+      console.log('Missing required fields:', {
+        firstName: !firstName,
+        lastName: !lastName,
+        username: !username,
+        email: !email,
+        password: !password
+      });
+
+      return res.status(400).json({
+        message: 'All fields are required',
+        requiredFields: {
+          firstName: !firstName ? 'First name is required' : null,
+          lastName: !lastName ? 'Last name is required' : null,
+          username: !username ? 'Username is required' : null,
+          email: !email ? 'Email is required' : null,
+          password: !password ? 'Password is required' : null
+        }
+      });
+    }
 
     // Check if user already exists
     const existingUser = await User.findOne({
@@ -24,11 +50,20 @@ router.post('/register', async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create new user
+    // Create new user with all required fields
     const user = new User({
+      firstName,
+      lastName,
       username,
       email,
       password: hashedPassword
+    });
+
+    console.log('Attempting to save user:', {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      username: user.username,
+      email: user.email
     });
 
     await user.save();
@@ -44,15 +79,22 @@ router.post('/register', async (req, res) => {
       message: 'User created successfully',
       user: {
         _id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
         username: user.username,
         email: user.email,
         isArtist: user.isArtist,
-        artistName: user.artistName
+        artistProfiles: user.artistProfiles
       },
       token
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Registration error:', error);
+    res.status(400).json({
+      message: 'Error creating user',
+      error: error.message,
+      requestBody: req.body  // Add this to see what was received
+    });
   }
 });
 
@@ -81,13 +123,17 @@ router.post('/login', async (req, res) => {
     );
 
     res.json({
-      message: 'Logged in successfully',
+      message: 'Login successful',
       user: {
         _id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
         username: user.username,
         email: user.email,
         isArtist: user.isArtist,
-        artistName: user.artistName
+        artistProfiles: user.artistProfiles,
+        activeProfile: user.activeProfile,
+        isAdmin: user.isAdmin
       },
       token
     });

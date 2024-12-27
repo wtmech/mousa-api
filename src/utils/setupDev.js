@@ -1,6 +1,6 @@
-const User = require('../models/User');
 const path = require('path');
 const fs = require('fs');
+const User = require('../models/User');
 
 const setupDevEnvironment = async () => {
   try {
@@ -10,9 +10,12 @@ const setupDevEnvironment = async () => {
 
     if (!fs.existsSync(musicPath)) {
       fs.mkdirSync(musicPath, { recursive: true });
+      console.log('Created tracks directory:', musicPath);
     }
+
     if (!fs.existsSync(coversPath)) {
       fs.mkdirSync(coversPath, { recursive: true });
+      console.log('Created covers directory:', coversPath);
     }
 
     // Create dev user if doesn't exist
@@ -20,14 +23,12 @@ const setupDevEnvironment = async () => {
 
     if (!devUser) {
       const user = new User({
-        username: 'devartist',
+        firstName: 'Dev',
+        lastName: 'User',
+        username: 'devuser',
         email: 'dev@example.com',
         password: 'development123',
-        isArtist: true,
-        artistProfile: {
-          verifiedBy: 'Local Development',
-          verificationDate: new Date()
-        }
+        isAdmin: true  // Only setting admin privileges
       });
 
       await user.save();
@@ -45,6 +46,7 @@ const setupDevEnvironment = async () => {
       console.log('Development user already exists with ID:', devUser._id);
     }
 
+    console.log('Development environment setup complete');
   } catch (error) {
     console.error('Setup error:', error);
   }

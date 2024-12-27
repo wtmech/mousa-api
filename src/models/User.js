@@ -2,12 +2,21 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
+  firstName: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  lastName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   username: {
     type: String,
     required: true,
     unique: true,
-    trim: true,
-    minlength: 3
+    trim: true
   },
   email: {
     type: String,
@@ -18,37 +27,15 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true,
-    minlength: 6
+    required: true
   },
-  isArtist: {
+  isAdmin: {
     type: Boolean,
     default: false
   },
-  artistProfile: {
-    verifiedBy: {
-      type: String,  // Name of distributor who verified
-      default: null
-    },
-    verificationDate: Date,
-    subscriptionPrice: {
-      type: Number,
-      default: 0
-    },
-    bio: String,
-    socialLinks: {
-      spotify: String,
-      instagram: String,
-      twitter: String
-    }
-  },
-  artistName: {
-    type: String,
-    trim: true
-  },
   subscriptions: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'Artist'
   }],
   createdAt: {
     type: Date,

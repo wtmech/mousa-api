@@ -8,6 +8,9 @@ const distributorRoutes = require('./routes/distributor');
 const setupDevEnvironment = require('./utils/setupDev');
 const trackRoutes = require('./routes/tracks');
 const userRoutes = require('./routes/users');
+const artistRoutes = require('./routes/artist');
+const adminRoutes = require('./routes/admin');
+const albumRoutes = require('./routes/albums');
 
 const app = express();
 
@@ -26,10 +29,15 @@ app.get('/health', (req, res) => {
 });
 
 // Routes
+console.log('Registering routes...');
 app.use('/api/auth', authRoutes);
 app.use('/api/distributor', distributorRoutes);
 app.use('/api/tracks', trackRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/artists', artistRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/albums', albumRoutes);
+console.log('Routes registered');
 
 // Only run setup in development
 if (process.env.NODE_ENV !== 'production') {

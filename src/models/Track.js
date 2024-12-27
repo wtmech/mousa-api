@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const User = require('./User');
 
 const trackSchema = new mongoose.Schema({
   title: {
@@ -7,71 +6,56 @@ const trackSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  artistName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  uploadedBy: {
+  artist: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Artist',
     required: true
   },
   album: {
-    type: String,
-    trim: true
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Album'
   },
-  duration: {
+  trackNumber: {
     type: Number,
-    required: true
+    min: 1
   },
+  discNumber: {
+    type: Number,
+    min: 1,
+    default: 1
+  },
+  distributor: {
+    name: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    uploadDate: {
+      type: Date,
+      default: Date.now
+    }
+  },
+  duration: Number,
+  genre: String,
   fileUrl: {
     type: String,
     required: true
   },
-  coverArt: {
-    type: String,
-    default: 'default-cover.jpg'
-  },
-  genre: {
-    type: String,
-    trim: true
-  },
-  distributor: {
-    type: String,
-    required: true,
-    enum: ['local', 'official', 'artist']
-  },
+  coverArt: String,
   isExclusive: {
-    type: Boolean,
-    default: true
-  },
-  allowDownload: {
     type: Boolean,
     default: false
   },
-  createdAt: {
-    type: Date,
-    default: Date.now
+  allowDownload: {
+    type: Boolean,
+    default: true
+  },
+  plays: {
+    type: Number,
+    default: 0
   }
+}, {
+  timestamps: true
 });
-
-// Method to check if a track can be deleted by a user
-trackSchema.methods.canBeDeletedBy = function(userId) {
-  return this.distributor === 'artist' &&
-        this.uploadedBy.toString() === userId.toString();
-};
-
-// Method to check if a user can access this track
-trackSchema.methods.canBeAccessedBy = async function(userId) {
-  if (!this.isExclusive) return true;
-
-  if (this.uploadedBy.toString() === userId.toString()) return true;
-
-  // Check if user subscribes to the artist
-  const user = await User.findById(userId);
-  return user && user.subscriptions &&
-        user.subscriptions.includes(this.uploadedBy);
-};
 
 module.exports = mongoose.model('Track', trackSchema);

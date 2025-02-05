@@ -33,9 +33,48 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  playlists: {
+    liked: {  // Reference to system "Liked Songs" playlist
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Playlist'
+    },
+    created: [{  // User-created playlists
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Playlist'
+    }]
+  },
+  following: {
+    users: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    artists: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Artist'
+    }]
+  },
+  followerCount: {
+    type: Number,
+    default: 0
+  },
   subscriptions: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Artist'
+    artist: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Artist'
+    },
+    startDate: {
+      type: Date,
+      default: Date.now
+    },
+    status: {
+      type: String,
+      enum: ['active', 'cancelled', 'expired'],
+      default: 'active'
+    },
+    price: {
+      type: Number,
+      required: true
+    }
   }],
   createdAt: {
     type: Date,

@@ -21,8 +21,10 @@ pids
 # Directory for uploaded files
 public/music/tracks/*
 public/music/covers/*
+public/images/playlists/*
 !public/music/tracks/.gitkeep
 !public/music/covers/.gitkeep
+!public/images/playlists/.gitkeep
 
 # IDE files
 .idea/

@@ -74,10 +74,12 @@ const artistSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  followerCount: {
+    type: Number,
+    default: 0
   }
 });
 
-module.exports = {
-  Artist: mongoose.model('Artist', artistSchema),
-  VALID_ROLES
-};
+const Artist = mongoose.model('Artist', artistSchema);
+module.exports = { Artist, VALID_ROLES };

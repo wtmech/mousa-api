@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const User = require('../models/User');
+const Playlist = require('../models/Playlist');
 
 const setupDevEnvironment = async () => {
   try {
@@ -42,6 +43,17 @@ const setupDevEnvironment = async () => {
         : envContent + `\nDEV_USER_ID=${user._id}`;
 
       fs.writeFileSync(envPath, updatedContent);
+
+      // Create Liked Songs playlist
+      const likedSongsPlaylist = new Playlist({
+        name: 'Liked Songs',
+        owner: user._id,
+        isSystem: true,
+        color: '#0D5EAF'
+      });
+
+      await likedSongsPlaylist.save();
+      console.log('Liked Songs playlist created with ID:', likedSongsPlaylist._id);
     } else {
       console.log('Development user already exists with ID:', devUser._id);
     }

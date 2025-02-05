@@ -11,6 +11,10 @@ const userRoutes = require('./routes/users');
 const artistRoutes = require('./routes/artist');
 const adminRoutes = require('./routes/admin');
 const albumRoutes = require('./routes/albums');
+const playlistRoutes = require('./routes/playlists');
+const searchRoutes = require('./routes/search');
+const followRoutes = require('./routes/follows');
+const folderRoutes = require('./routes/folders');
 
 const app = express();
 
@@ -19,9 +23,11 @@ connectDB();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
 app.use('/music', express.static(path.join(__dirname, '../public/music')));
+app.use('/images', express.static(path.join(__dirname, '../public/images')));
 
 // Test routes
 app.get('/health', (req, res) => {
@@ -37,6 +43,10 @@ app.use('/api/users', userRoutes);
 app.use('/api/artists', artistRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/albums', albumRoutes);
+app.use('/api/playlists', playlistRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/follows', followRoutes);
+app.use('/api/folders', folderRoutes);
 console.log('Routes registered');
 
 // Only run setup in development

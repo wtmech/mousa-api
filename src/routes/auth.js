@@ -1,51 +1,75 @@
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Playlist = require('../models/Playlist');
 
-// Register route
+// Register user
 router.post('/register', async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { firstName, lastName, username, email, password } = req.body;
 
     // Check if user already exists
-    const existingUser = await User.findOne({
-      $or: [{ email }, { username }]
-    });
-
-    if (existingUser) {
+    let user = await User.findOne({ $or: [{ email }, { username }] });
+    if (user) {
       return res.status(400).json({
-        message: 'User with this email or username already exists'
+        message: 'User already exists with that email or username'
       });
     }
 
-    // Create new user
-    const user = new User({
+    // Create user
+    user = new User({
+      firstName,
+      lastName,
       username,
       email,
-      password
+      password: await bcrypt.hash(password, 10)
     });
+
+    // Create Liked Songs playlist
+    const likedSongs = new Playlist({
+      name: 'Liked Songs',
+      owner: user._id,
+      isSystem: true,
+      isPrivate: true,
+      description: 'Songs you\'ve liked',
+      tracks: []
+    });
+
+    await likedSongs.save();
+
+    // Link playlist to user
+    user.playlists = {
+      liked: likedSongs._id,
+      created: []
+    };
 
     await user.save();
 
-    // Generate JWT token
+    // Generate token
     const token = jwt.sign(
-      { userId: user._id },
+      { id: user._id },
       process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: '30d' }
     );
 
     res.status(201).json({
-      message: 'User created successfully',
       token,
       user: {
         id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
         username: user.username,
-        email: user.email
+        email: user.email,
+        isAdmin: user.isAdmin,
+        playlists: user.playlists
       }
     });
+
   } catch (error) {
-    res.status(500).json({ message: 'Error creating user', error: error.message });
+    console.error('Registration error:', error);
+    res.status(500).json({ message: error.message });
   }
 });
 

@@ -90,52 +90,30 @@ router.delete('/:id', auth, async (req, res) => {
 // Get all tracks
 router.get('/', async (req, res) => {
   try {
-    const tracks = await Track.find()
-      .populate('uploadedBy', 'username')
-      .select({
-        title: 1,
-        artistName: 1,
-        album: 1,
-        duration: 1,
-        fileUrl: 1,
-        coverArt: 1,
-        genre: 1,
-        uploadedBy: 1,
-        createdAt: 1
-      });
+    const tracks = await Track.find({})
+      .populate('artist', 'name')
+      .populate('album', 'title coverArt')
+      .lean();
     res.json(tracks);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// Get single track by ID
+// Get single track
 router.get('/:id', async (req, res) => {
   try {
-    console.log('Fetching track with ID:', req.params.id);
     const track = await Track.findById(req.params.id)
-      .populate('uploadedBy', 'username')
-      .select({
-        title: 1,
-        artistName: 1,
-        album: 1,
-        duration: 1,
-        fileUrl: 1,
-        coverArt: 1,
-        genre: 1,
-        uploadedBy: 1,
-        createdAt: 1
-      });
+      .populate('artist', 'name')
+      .populate('album', 'title coverArt')
+      .lean();
 
     if (!track) {
-      console.log('Track not found');
       return res.status(404).json({ message: 'Track not found' });
     }
 
-    console.log('Track found:', track);
     res.json(track);
   } catch (error) {
-    console.error('Error fetching track:', error);
     res.status(500).json({ message: error.message });
   }
 });

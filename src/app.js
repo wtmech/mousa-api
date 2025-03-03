@@ -1,8 +1,8 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const connectDB = require('./utils/dbConnect');
 
 // Initialize express app
 const app = express();
@@ -16,17 +16,16 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+connectDB();
 
-// Routes (to be implemented)
+// Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/artists', require('./routes/artists'));
 app.use('/api/tracks', require('./routes/tracks'));
+app.use('/api/albums', require('./routes/albums'));
 app.use('/api/playlists', require('./routes/playlists'));
-app.use('/api/distributor', require('./routes/distributor'));
+app.use('/api/exclusive-content', require('./routes/exclusive-content'));
 app.use('/api/search', require('./routes/search'));
 app.use('/api/follows', require('./routes/follows'));
 

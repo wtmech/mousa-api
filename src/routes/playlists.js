@@ -6,6 +6,8 @@ const User = require('../models/User');
 const Track = require('../models/Track');
 const { uploadCover } = require('../utils/fileUpload');
 const mongoose = require('mongoose');
+const PlaylistFolder = require('../models/PlaylistFolder');
+const { validateColor } = require('../middleware/validation');
 
 // Get all public playlists (paginated)
 router.get('/public', async (req, res) => {
@@ -104,20 +106,34 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // Create a new playlist
-router.post('/', auth, uploadCover, async (req, res) => {
+router.post('/', [auth, validateColor], uploadCover, async (req, res) => {
   try {
-    const { name, description, isPublic } = req.body;
+    const { name, description, isPublic, color, folder } = req.body;
 
+    // Validate input
     if (!name) {
       return res.status(400).json({ message: 'Playlist name is required' });
     }
 
+    // Check if folder exists and belongs to user if provided
+    if (folder) {
+      const playlistFolder = await PlaylistFolder.findById(folder);
+      if (!playlistFolder) {
+        return res.status(404).json({ message: 'Folder not found' });
+      }
+      if (playlistFolder.owner.toString() !== req.user.id) {
+        return res.status(403).json({ message: 'Not authorized to use this folder' });
+      }
+    }
+
+    // Create new playlist
     const newPlaylist = new Playlist({
       name,
-      description: description || '',
+      description,
       owner: req.user.id,
-      isPublic: isPublic === 'false' ? false : true,
-      type: 'user'
+      isPublic: isPublic === 'true' || isPublic === true,
+      color: color || '#1DB954', // Use provided color or default
+      folder: folder || null
     });
 
     // Add cover image if uploaded
@@ -127,11 +143,17 @@ router.post('/', auth, uploadCover, async (req, res) => {
 
     await newPlaylist.save();
 
-    // Add to user's created playlists
-    await User.findByIdAndUpdate(
-      req.user.id,
-      { $push: { 'playlists.created': newPlaylist._id } }
-    );
+    // Add to user's playlists
+    await User.findByIdAndUpdate(req.user.id, {
+      $push: { 'playlists.created': newPlaylist._id }
+    });
+
+    // Add to folder if specified
+    if (folder) {
+      await PlaylistFolder.findByIdAndUpdate(folder, {
+        $push: { playlists: newPlaylist._id }
+      });
+    }
 
     res.status(201).json(newPlaylist);
   } catch (err) {
@@ -225,27 +247,60 @@ router.delete('/:id/tracks/:trackId', auth, async (req, res) => {
 });
 
 // Update playlist details
-router.patch('/:id', auth, uploadCover, async (req, res) => {
+router.put('/:id', [auth, validateColor], uploadCover, async (req, res) => {
   try {
-    const playlist = await Playlist.findById(req.params.id);
+    const playlistId = req.params.id;
+    const { name, description, isPublic, color, folder } = req.body;
 
+    // Find the playlist
+    const playlist = await Playlist.findById(playlistId);
     if (!playlist) {
       return res.status(404).json({ message: 'Playlist not found' });
     }
 
-    // Check if user owns playlist
-    if (playlist.owner.toString() !== req.user.id) {
-      return res.status(403).json({ message: 'Access denied: You do not own this playlist' });
+    // Verify ownership
+    if (playlist.owner.toString() !== req.user.id && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized' });
     }
 
-    const { name, description, isPublic } = req.body;
+    // Check if new folder exists and belongs to user if provided
+    if (folder && folder !== playlist.folder) {
+      const playlistFolder = await PlaylistFolder.findById(folder);
+      if (!playlistFolder) {
+        return res.status(404).json({ message: 'Folder not found' });
+      }
+      if (playlistFolder.owner.toString() !== req.user.id) {
+        return res.status(403).json({ message: 'Not authorized to use this folder' });
+      }
 
-    // Update fields if provided
+      // Remove from old folder if exists
+      if (playlist.folder) {
+        await PlaylistFolder.findByIdAndUpdate(playlist.folder, {
+          $pull: { playlists: playlistId }
+        });
+      }
+
+      // Add to new folder
+      await PlaylistFolder.findByIdAndUpdate(folder, {
+        $push: { playlists: playlistId }
+      });
+    } else if (folder === null && playlist.folder) {
+      // Remove from current folder if folder is explicitly set to null
+      await PlaylistFolder.findByIdAndUpdate(playlist.folder, {
+        $pull: { playlists: playlistId }
+      });
+    }
+
+    // Update fields
     if (name) playlist.name = name;
     if (description !== undefined) playlist.description = description;
-    if (isPublic !== undefined) playlist.isPublic = isPublic === 'false' ? false : true;
+    if (isPublic !== undefined) {
+      playlist.isPublic = isPublic === 'true' || isPublic === true;
+    }
+    if (color) playlist.color = color;
+    if (folder !== undefined) playlist.folder = folder || null;
 
-    // Add cover image if uploaded
+    // Update cover image if uploaded
     if (req.file) {
       playlist.coverImage = `/uploads/covers/${req.file.filename}`;
     }
@@ -325,6 +380,427 @@ router.post('/:id/follow', auth, async (req, res) => {
       message: isFollowing ? 'Playlist unfollowed' : 'Playlist followed',
       followerCount: playlist.stats.followerCount
     });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Batch update playlists
+router.post('/batch-update', [auth, validateColor], async (req, res) => {
+  try {
+    const { playlistIds, updates } = req.body;
+
+    // Validate inputs
+    if (!playlistIds || !Array.isArray(playlistIds) || playlistIds.length === 0) {
+      return res.status(400).json({ message: 'Playlist IDs are required' });
+    }
+
+    if (!updates || Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'Updates are required' });
+    }
+
+    // Verify user owns all the playlists
+    const playlists = await Playlist.find({
+      _id: { $in: playlistIds },
+      owner: req.user.id
+    });
+
+    if (playlists.length !== playlistIds.length) {
+      return res.status(403).json({ message: 'You do not own all specified playlists' });
+    }
+
+    // Validate color if it's being updated
+    if (updates.color) {
+      const hexColorRegex = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
+      if (!hexColorRegex.test(updates.color)) {
+        return res.status(400).json({ message: 'Invalid color format' });
+      }
+    }
+
+    // If folder is being updated, verify it exists and user owns it
+    if (updates.folder) {
+      if (updates.folder !== null) {
+        const folder = await PlaylistFolder.findOne({
+          _id: updates.folder,
+          owner: req.user.id
+        });
+
+        if (!folder) {
+          return res.status(404).json({ message: 'Folder not found or not owned by you' });
+        }
+
+        // Add playlists to folder
+        await PlaylistFolder.findByIdAndUpdate(updates.folder, {
+          $addToSet: { playlists: { $each: playlistIds } }
+        });
+      }
+
+      // Remove playlists from their current folders
+      const currentFolders = [...new Set(playlists.map(p => p.folder).filter(f => f))];
+      for (const folderId of currentFolders) {
+        await PlaylistFolder.findByIdAndUpdate(folderId, {
+          $pull: { playlists: { $in: playlistIds } }
+        });
+      }
+    }
+
+    // Set up allowed update fields
+    const allowedUpdates = {};
+    if (updates.color) allowedUpdates.color = updates.color;
+    if (updates.isPublic !== undefined) allowedUpdates.isPublic = updates.isPublic;
+    if (updates.folder !== undefined) allowedUpdates.folder = updates.folder;
+
+    // Apply updates
+    await Playlist.updateMany(
+      { _id: { $in: playlistIds } },
+      { $set: allowedUpdates }
+    );
+
+    res.json({
+      message: 'Playlists updated successfully',
+      updatedCount: playlistIds.length,
+      updates: allowedUpdates
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get user's recently modified playlists
+router.get('/recent', auth, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+
+    // Get user's recently modified playlists
+    const recentPlaylists = await Playlist.find({
+      owner: req.user.id
+    })
+    .sort({ updatedAt: -1 })
+    .limit(limit)
+    .populate('folder', 'name')
+    .select('name color coverImage updatedAt tracks.length stats');
+
+    res.json(recentPlaylists);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Filter playlists by various criteria
+router.get('/filter', auth, async (req, res) => {
+  try {
+    const {
+      color,
+      folder,
+      hasImage,
+      createdAfter,
+      createdBefore,
+      updatedAfter,
+      updatedBefore,
+      minTracks,
+      maxTracks,
+      sortBy,
+      sortOrder
+    } = req.query;
+
+    const query = { owner: req.user.id };
+
+    // Apply filters
+    if (color) {
+      query.color = color;
+    }
+
+    if (folder === 'none') {
+      query.folder = null;
+    } else if (folder) {
+      query.folder = folder;
+    }
+
+    if (hasImage === 'true') {
+      query.coverImage = { $ne: null };
+    } else if (hasImage === 'false') {
+      query.coverImage = null;
+    }
+
+    // Date range filters
+    const dateQuery = {};
+    if (createdAfter) {
+      dateQuery.$gte = new Date(createdAfter);
+    }
+    if (createdBefore) {
+      dateQuery.$lte = new Date(createdBefore);
+    }
+    if (Object.keys(dateQuery).length > 0) {
+      query.createdAt = dateQuery;
+    }
+
+    // Updated date range
+    const updatedDateQuery = {};
+    if (updatedAfter) {
+      updatedDateQuery.$gte = new Date(updatedAfter);
+    }
+    if (updatedBefore) {
+      updatedDateQuery.$lte = new Date(updatedBefore);
+    }
+    if (Object.keys(updatedDateQuery).length > 0) {
+      query.updatedAt = updatedDateQuery;
+    }
+
+    // Track count filters
+    if (minTracks) {
+      query.$expr = { $gte: [{ $size: "$tracks" }, parseInt(minTracks)] };
+    }
+    if (maxTracks) {
+      if (query.$expr) {
+        // If we already have an $expr for minTracks, we need to use $and
+        query.$expr = {
+          $and: [
+            query.$expr,
+            { $lte: [{ $size: "$tracks" }, parseInt(maxTracks)] }
+          ]
+        };
+      } else {
+        query.$expr = { $lte: [{ $size: "$tracks" }, parseInt(maxTracks)] };
+      }
+    }
+
+    // Determine sort options
+    let sortOptions = { createdAt: -1 }; // Default sort
+    if (sortBy) {
+      const order = sortOrder === 'asc' ? 1 : -1;
+
+      switch(sortBy) {
+        case 'name':
+          sortOptions = { name: order };
+          break;
+        case 'created':
+          sortOptions = { createdAt: order };
+          break;
+        case 'updated':
+          sortOptions = { updatedAt: order };
+          break;
+        case 'tracks':
+          // For track count sorting, we'll handle it in JS memory
+          // as it's more complex in MongoDB without a direct field
+          sortOptions = { createdAt: -1 }; // Default, will sort in memory
+          break;
+        default:
+          sortOptions = { createdAt: -1 };
+      }
+    }
+
+    // Execute query
+    let playlists = await Playlist.find(query)
+      .sort(sortOptions)
+      .populate('folder', 'name');
+
+    // If sorting by track count, do it in memory
+    if (sortBy === 'tracks') {
+      playlists = playlists.sort((a, b) => {
+        const aCount = a.tracks ? a.tracks.length : 0;
+        const bCount = b.tracks ? b.tracks.length : 0;
+        return sortOrder === 'asc' ? aCount - bCount : bCount - aCount;
+      });
+    }
+
+    res.json({
+      playlists,
+      count: playlists.length,
+      filters: {
+        color,
+        folder,
+        hasImage,
+        createdDateRange: createdAfter || createdBefore ? { from: createdAfter, to: createdBefore } : null,
+        updatedDateRange: updatedAfter || updatedBefore ? { from: updatedAfter, to: updatedBefore } : null,
+        trackCount: minTracks || maxTracks ? { min: minTracks, max: maxTracks } : null,
+        sort: { by: sortBy, order: sortOrder }
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Duplicate a playlist
+router.post('/:id/duplicate', auth, async (req, res) => {
+  try {
+    const sourcePlaylistId = req.params.id;
+    const { name, description, folder } = req.body;
+
+    // Find the source playlist and verify access
+    const sourcePlaylist = await Playlist.findOne({
+      _id: sourcePlaylistId,
+      $or: [
+        { owner: req.user.id },
+        { isPublic: true }
+      ]
+    }).populate('tracks.track');
+
+    if (!sourcePlaylist) {
+      return res.status(404).json({ message: 'Playlist not found or access denied' });
+    }
+
+    // Validate folder if provided
+    if (folder) {
+      const folderExists = await PlaylistFolder.findOne({
+        _id: folder,
+        owner: req.user.id
+      });
+
+      if (!folderExists) {
+        return res.status(404).json({ message: 'Target folder not found or not owned by you' });
+      }
+    }
+
+    // Create new playlist
+    const newPlaylist = new Playlist({
+      name: name || `${sourcePlaylist.name} (copy)`,
+      description: description || sourcePlaylist.description,
+      owner: req.user.id,
+      isPublic: false, // Default to private for copied playlists
+      color: sourcePlaylist.color,
+      tracks: sourcePlaylist.tracks.map(track => ({
+        track: track.track._id,
+        addedAt: new Date()
+      })),
+      folder: folder || null,
+      stats: {
+        totalDuration: sourcePlaylist.stats.totalDuration,
+        followerCount: 0
+      }
+    });
+
+    // Save the new playlist
+    await newPlaylist.save();
+
+    // If folder is specified, add playlist to folder
+    if (folder) {
+      await PlaylistFolder.findByIdAndUpdate(folder, {
+        $addToSet: { playlists: newPlaylist._id }
+      });
+    }
+
+    // Update user's created playlists
+    await User.findByIdAndUpdate(req.user.id, {
+      $push: { 'playlists.created': newPlaylist._id }
+    });
+
+    res.status(201).json({
+      message: 'Playlist duplicated successfully',
+      playlist: {
+        id: newPlaylist._id,
+        name: newPlaylist.name,
+        trackCount: newPlaylist.tracks.length
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Toggle a track in the user's Liked Music playlist
+router.post('/liked/toggle/:trackId', auth, async (req, res) => {
+  try {
+    const trackId = req.params.trackId;
+
+    // Validate trackId
+    if (!mongoose.Types.ObjectId.isValid(trackId)) {
+      return res.status(400).json({ message: 'Invalid track ID' });
+    }
+
+    // Make sure track exists
+    const track = await Track.findById(trackId);
+    if (!track) {
+      return res.status(404).json({ message: 'Track not found' });
+    }
+
+    // Get user's liked playlist ID
+    const user = await User.findById(req.user.id);
+    if (!user || !user.playlists || !user.playlists.liked) {
+      return res.status(404).json({ message: 'Liked playlist not found' });
+    }
+
+    const likedPlaylistId = user.playlists.liked;
+
+    // Get the liked playlist
+    const likedPlaylist = await Playlist.findById(likedPlaylistId);
+    if (!likedPlaylist) {
+      return res.status(404).json({ message: 'Liked playlist not found' });
+    }
+
+    // Check if track is already in the playlist
+    const trackIndex = likedPlaylist.tracks.findIndex(
+      item => item.track.toString() === trackId
+    );
+
+    let message = '';
+    let isLiked = false;
+
+    if (trackIndex === -1) {
+      // Add track to playlist
+      likedPlaylist.tracks.push({
+        track: trackId,
+        addedAt: new Date()
+      });
+      message = 'Track added to Liked Music';
+      isLiked = true;
+    } else {
+      // Remove track from playlist
+      likedPlaylist.tracks.splice(trackIndex, 1);
+      message = 'Track removed from Liked Music';
+      isLiked = false;
+    }
+
+    // Update duration stats
+    const trackDuration = track.duration || 0;
+    likedPlaylist.stats.totalDuration = likedPlaylist.tracks.reduce(
+      (total, item) => total + (item.track.duration || 0),
+      0
+    );
+
+    await likedPlaylist.save();
+
+    res.json({
+      message,
+      isLiked,
+      playlistId: likedPlaylist._id
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Check if a track is in the user's Liked Music playlist
+router.get('/liked/check/:trackId', auth, async (req, res) => {
+  try {
+    const trackId = req.params.trackId;
+
+    // Validate trackId
+    if (!mongoose.Types.ObjectId.isValid(trackId)) {
+      return res.status(400).json({ message: 'Invalid track ID' });
+    }
+
+    // Get user's liked playlist ID
+    const user = await User.findById(req.user.id);
+    if (!user || !user.playlists || !user.playlists.liked) {
+      return res.status(404).json({ message: 'Liked playlist not found' });
+    }
+
+    const likedPlaylistId = user.playlists.liked;
+
+    // Check if track is in the playlist
+    const playlist = await Playlist.findById(likedPlaylistId);
+    const isLiked = playlist.tracks.some(
+      item => item.track.toString() === trackId
+    );
+
+    res.json({ isLiked });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });

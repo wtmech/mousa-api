@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Playlist = require('../models/Playlist');
 const { auth } = require('../middleware/auth');
 
 // Register a new user
@@ -24,6 +25,21 @@ router.post('/register', async (req, res) => {
       email,
       password
     });
+
+    // Create a Liked Music playlist for the user
+    const likedPlaylist = new Playlist({
+      name: 'Liked Music',
+      description: 'Songs you have liked',
+      owner: user._id,
+      isPublic: false,
+      type: 'system',
+      color: '#1DB954'
+    });
+
+    await likedPlaylist.save();
+
+    // Add the Liked Music playlist to the user
+    user.playlists.liked = likedPlaylist._id;
 
     await user.save();
 

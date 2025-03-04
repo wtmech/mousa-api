@@ -283,4 +283,77 @@ router.post('/like/:trackId', auth, async (req, res) => {
   }
 });
 
+// Get user's library (playlists and folders in a hierarchical structure)
+router.get('/me/library', auth, async (req, res) => {
+  try {
+    // Get user with populated fields
+    const user = await User.findById(req.user.id)
+      .populate({
+        path: 'playlists.created',
+        select: 'name color coverImage tracks folder stats.totalDuration stats.followerCount createdAt updatedAt'
+      })
+      .populate({
+        path: 'playlists.folders',
+        select: 'name description playlists parentFolder isPublic createdAt updatedAt',
+        populate: {
+          path: 'playlists',
+          select: 'name color coverImage stats.totalDuration'
+        }
+      })
+      .populate({
+        path: 'playlists.liked',
+        select: 'name coverImage tracks stats.totalDuration'
+      });
+
+    // Get user's ownership of playlists
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Organize data into a hierarchical structure
+    const rootFolders = user.playlists.folders.filter(
+      folder => !folder.parentFolder
+    );
+
+    // Find playlists not in any folder
+    const unfolderedPlaylists = user.playlists.created.filter(
+      playlist => !playlist.folder
+    );
+
+    // Get all child folders for each root folder
+    const folderHierarchy = await buildFolderHierarchy(rootFolders, user.playlists.folders);
+
+    res.json({
+      rootFolders: folderHierarchy,
+      unfolderedPlaylists: unfolderedPlaylists,
+      likedPlaylist: user.playlists.liked,
+      totalPlaylists: user.playlists.created.length,
+      totalFolders: user.playlists.folders.length
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Helper function to build folder hierarchy
+async function buildFolderHierarchy(folders, allFolders) {
+  const result = [];
+
+  for (const folder of folders) {
+    const childFolders = allFolders.filter(
+      f => f.parentFolder && f.parentFolder.toString() === folder._id.toString()
+    );
+
+    const folderWithChildren = {
+      ...folder.toObject(),
+      childFolders: await buildFolderHierarchy(childFolders, allFolders)
+    };
+
+    result.push(folderWithChildren);
+  }
+
+  return result;
+}
+
 module.exports = router;

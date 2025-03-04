@@ -25,9 +25,15 @@ app.use('/api/artists', require('./routes/artists'));
 app.use('/api/tracks', require('./routes/tracks'));
 app.use('/api/albums', require('./routes/albums'));
 app.use('/api/playlists', require('./routes/playlists'));
+app.use('/api/playlist-folders', require('./routes/playlist-folders'));
 app.use('/api/exclusive-content', require('./routes/exclusive-content'));
 app.use('/api/search', require('./routes/search'));
 app.use('/api/follows', require('./routes/follows'));
+
+// New routes for artist subscriptions
+app.use('/api/subscription-tiers', require('./routes/subscription-tiers'));
+app.use('/api/subscriptions', require('./routes/subscriptions'));
+app.use('/api/artist-events', require('./routes/artist-events'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

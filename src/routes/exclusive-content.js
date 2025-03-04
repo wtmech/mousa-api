@@ -1,31 +1,34 @@
 const express = require('express');
 const router = express.Router();
 const { auth } = require('../middleware/auth');
-const User = require('../models/User');
+const ExclusiveContent = require('../models/ExclusiveContent');
 const Artist = require('../models/Artist');
-const Track = require('../models/Track');
-const Album = require('../models/Album');
-const { uploadToS3, uploadImageToS3 } = require('../utils/fileUpload');
-const multer = require('multer');
-const upload = multer({ storage: multer.memoryStorage() });
+const UserSubscription = require('../models/UserSubscription');
+const { uploadMedia } = require('../utils/fileUpload');
+const mongoose = require('mongoose');
 
-// Middleware to check if user has artist rights
-const artistAuth = async (req, res, next) => {
+// Middleware to check if user is artist member
+const isArtistMember = async (req, res, next) => {
   try {
-    // Find the user with populated artist data
-    const user = await User.findById(req.user.id).populate('artist');
+    const artistId = req.params.artistId || req.body.artist;
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    // Find the artist
+    const artist = await Artist.findById(artistId);
+    if (!artist) {
+      return res.status(404).json({ message: 'Artist not found' });
     }
 
-    // Check if user has an artist profile
-    if (!user.artist) {
-      return res.status(403).json({ message: 'Artist profile required' });
+    // Check if user is member of the artist
+    const isMember = artist.members.some(
+      member => member.userId.toString() === req.user.id
+    );
+
+    if (!isMember && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to manage this artist' });
     }
 
-    // Add the artist data to the request for use in route handlers
-    req.artist = user.artist;
+    // Add artist to request for later use
+    req.artist = artist;
     next();
   } catch (err) {
     console.error(err);
@@ -33,40 +36,122 @@ const artistAuth = async (req, res, next) => {
   }
 };
 
-// Get artist exclusive content dashboard
-router.get('/dashboard', [auth, artistAuth], async (req, res) => {
+// Middleware to check subscription access
+const checkSubscriptionAccess = async (req, res, next) => {
   try {
-    const artistId = req.artist._id;
+    const contentId = req.params.id;
 
-    // Get exclusive content stats
-    const exclusiveTracks = await Track.find({
+    // Find the content
+    const content = await ExclusiveContent.findById(contentId)
+      .populate('minimumTierRequired');
+
+    if (!content) {
+      return res.status(404).json({ message: 'Content not found' });
+    }
+
+    // If public content, allow access
+    if (content.isPublic) {
+      req.content = content;
+      return next();
+    }
+
+    // At this point, content is exclusive - check subscription
+    const subscription = await UserSubscription.findOne({
+      user: req.user.id,
+      artist: content.artist,
+      status: 'active'
+    }).populate('tier');
+
+    // If no subscription, deny access
+    if (!subscription || !subscription.canAccessContent()) {
+      return res.status(403).json({
+        message: 'This content requires an active subscription'
+      });
+    }
+
+    // If content requires minimum tier, check tier level
+    if (content.minimumTierRequired && subscription.tier) {
+      // In a real app, compare tier levels with a more sophisticated method
+      // Here we simply compare tier IDs
+      if (content.minimumTierRequired.toString() !== subscription.tier._id.toString()) {
+        return res.status(403).json({
+          message: 'This content requires a higher subscription tier',
+          requiredTier: content.minimumTierRequired.name
+        });
+      }
+    }
+
+    // User has access, continue
+    req.content = content;
+    next();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Get all exclusive content for an artist
+router.get('/artist/:artistId', auth, async (req, res) => {
+  try {
+    const artistId = req.params.artistId;
+    const userId = req.user.id;
+
+    // First, check if user has subscription to this artist
+    const subscription = await UserSubscription.findOne({
+      user: userId,
       artist: artistId,
-      isExclusive: true
-    });
+      status: 'active'
+    }).populate('tier');
 
-    // Count total exclusive plays
-    const totalExclusivePlays = exclusiveTracks.reduce((sum, track) => sum + track.plays, 0);
+    // Base query: only public content or if content doesn't require tier
+    let query = {
+      artist: artistId,
+      $or: [
+        { isPublic: true },
+        {
+          isPublic: false,
+          minimumTierRequired: { $exists: false }
+        }
+      ]
+    };
 
-    // Count total supporter-only content
-    const exclusiveTrackCount = exclusiveTracks.length;
+    // If user is subscribed, filter based on tier
+    if (subscription && subscription.canAccessContent()) {
+      if (subscription.tier) {
+        // Add content matching their tier
+        query.$or.push({
+          minimumTierRequired: subscription.tier._id
+        });
+      } else {
+        // No tier restriction, show all content
+        query = { artist: artistId };
+      }
+    }
 
-    // Get recent supporters (this would ideally connect to a subscription/support system)
-    // For now, just providing a mock response structure
+    // Pagination
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Filter by content type if specified
+    if (req.query.type) {
+      query.contentType = req.query.type;
+    }
+
+    // Get content
+    const content = await ExclusiveContent.find(query)
+      .sort({ releaseDate: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('minimumTierRequired', 'name');
+
+    const total = await ExclusiveContent.countDocuments(query);
 
     res.json({
-      exclusiveContent: {
-        totalTracks: exclusiveTrackCount,
-        totalPlays: totalExclusivePlays,
-      },
-      supporterStats: {
-        totalSupporters: req.artist.supporterCount || 0,
-        recentSupporters: []
-      },
-      recentActivity: {
-        lastUpload: exclusiveTracks.length > 0 ?
-          exclusiveTracks.sort((a, b) => b.createdAt - a.createdAt)[0].createdAt :
-          null
-      }
+      content,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+      totalContent: total
     });
   } catch (err) {
     console.error(err);
@@ -74,299 +159,205 @@ router.get('/dashboard', [auth, artistAuth], async (req, res) => {
   }
 });
 
-// Upload a new exclusive track
-router.post('/tracks', [
-  auth,
-  artistAuth,
-  upload.fields([
-    { name: 'audio', maxCount: 1 },
-    { name: 'coverArt', maxCount: 1 }
-  ])
-], async (req, res) => {
+// Get a specific content item by ID
+router.get('/:id', auth, checkSubscriptionAccess, async (req, res) => {
+  try {
+    // Content is already verified and available in req.content
+    // Increment view count
+    req.content.viewCount += 1;
+    await req.content.save();
+
+    res.json(req.content);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Create new exclusive content for an artist
+router.post('/', auth, isArtistMember, uploadMedia, async (req, res) => {
   try {
     const {
       title,
-      genre,
-      isExclusive,
-      minimumTier,
       description,
+      contentType,
       releaseDate,
-      trackNumber,
-      lyrics
+      minimumTierRequired,
+      isPublic,
+      expiresAt,
+      tags,
+      artist
     } = req.body;
 
     // Validate required fields
-    if (!title || !req.files.audio) {
-      return res.status(400).json({ message: 'Title and audio file are required' });
+    if (!title || !contentType || !artist) {
+      return res.status(400).json({ message: 'Title, content type, and artist are required' });
     }
 
-    // Upload audio file to S3
-    const audioFile = req.files.audio[0];
-    const audioUrl = await uploadToS3(audioFile, 'exclusive-tracks');
+    // Parse tags and file info
+    const parsedTags = tags ? (typeof tags === 'string' ? JSON.parse(tags) : tags) : [];
 
-    // Upload cover art if provided
-    let coverArtUrl = null;
-    if (req.files.coverArt) {
-      coverArtUrl = await uploadImageToS3(req.files.coverArt[0], 'track-covers');
-    }
-
-    // Create new track
-    const newTrack = new Track({
+    // Create new content
+    const newContent = new ExclusiveContent({
       title,
-      artist: req.artist._id,
-      audioUrl,
-      genre: genre || 'Unknown',
-      coverArt: coverArtUrl,
-      isExclusive: true, // Always true for exclusive content
-      minimumSupportTier: minimumTier || 1,
-      description: description || '',
-      releaseDate: releaseDate || Date.now(),
-      trackNumber: trackNumber || 1,
-      lyrics: lyrics || '',
-      plays: 0
+      description,
+      contentType,
+      artist,
+      releaseDate: releaseDate || new Date(),
+      minimumTierRequired: minimumTierRequired || null,
+      isPublic: isPublic === 'true' || isPublic === true,
+      expiresAt: expiresAt || null,
+      tags: parsedTags
     });
 
-    await newTrack.save();
+    // Handle file uploads
+    if (req.file) {
+      newContent.contentUrl = `/uploads/content/${req.file.filename}`;
 
-    // Update artist's track count
-    await Artist.findByIdAndUpdate(
-      req.artist._id,
-      { $inc: { exclusiveTrackCount: 1 } }
+      // Add file metadata
+      if (req.file.mimetype.startsWith('video/')) {
+        newContent.duration = req.body.duration || 0;
+      } else if (req.file.mimetype.startsWith('audio/')) {
+        newContent.duration = req.body.duration || 0;
+      }
+
+      newContent.fileSize = req.file.size;
+    } else if (req.body.contentUrl) {
+      newContent.contentUrl = req.body.contentUrl;
+    } else {
+      return res.status(400).json({ message: 'Content file or URL is required' });
+    }
+
+    // Handle thumbnail
+    if (req.body.thumbnailUrl) {
+      newContent.thumbnailUrl = req.body.thumbnailUrl;
+    }
+
+    await newContent.save();
+
+    res.status(201).json(newContent);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Update exclusive content
+router.put('/:id', auth, uploadMedia, async (req, res) => {
+  try {
+    const contentId = req.params.id;
+
+    // Find the content
+    const content = await ExclusiveContent.findById(contentId);
+    if (!content) {
+      return res.status(404).json({ message: 'Content not found' });
+    }
+
+    // Check if user is authorized to update
+    const artist = await Artist.findById(content.artist);
+    const isMember = artist.members.some(
+      member => member.userId.toString() === req.user.id
     );
 
-    res.status(201).json(newTrack);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Get all exclusive tracks for the authenticated artist
-router.get('/tracks', [auth, artistAuth], async (req, res) => {
-  try {
-    const { page, limit } = req.query;
-
-    const queryLimit = parseInt(limit) || 20;
-    const queryPage = parseInt(page) || 1;
-    const skip = (queryPage - 1) * queryLimit;
-
-    // Find all exclusive tracks for this artist
-    const tracks = await Track.find({
-      artist: req.artist._id,
-      isExclusive: true
-    })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(queryLimit);
-
-    const total = await Track.countDocuments({
-      artist: req.artist._id,
-      isExclusive: true
-    });
-
-    res.json({
-      tracks,
-      total,
-      currentPage: queryPage,
-      totalPages: Math.ceil(total / queryLimit)
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Upload exclusive content (non-audio, like images, PDFs, etc.)
-router.post('/media', [
-  auth,
-  artistAuth,
-  upload.single('media')
-], async (req, res) => {
-  try {
-    const { title, description, contentType, minimumTier } = req.body;
-
-    if (!title || !req.file) {
-      return res.status(400).json({ message: 'Title and media file are required' });
-    }
-
-    // Upload media file to S3
-    // This is a simplified example - in a real application, you'd have more robust handling
-    // for different content types, validation, etc.
-    const mediaUrl = await uploadToS3(req.file, 'exclusive-media');
-
-    // Create a record of the exclusive content
-    // In a real application, you'd have a separate model for non-audio content
-    // This is simplified to demonstrate the concept
-    const exclusiveContent = {
-      title,
-      description: description || '',
-      artistId: req.artist._id,
-      mediaUrl,
-      contentType: contentType || 'other',
-      minimumSupportTier: minimumTier || 1,
-      createdAt: new Date(),
-      isExclusive: true
-    };
-
-    // Normally you'd save this to a database
-    // For this example, we're just returning the object
-
-    res.status(201).json({
-      message: 'Exclusive content uploaded successfully',
-      content: exclusiveContent
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Update an exclusive track
-router.patch('/tracks/:id', [
-  auth,
-  artistAuth,
-  upload.fields([
-    { name: 'audio', maxCount: 1 },
-    { name: 'coverArt', maxCount: 1 }
-  ])
-], async (req, res) => {
-  try {
-    const trackId = req.params.id;
-    const {
-      title,
-      genre,
-      minimumTier,
-      description,
-      releaseDate,
-      trackNumber,
-      lyrics
-    } = req.body;
-
-    // Find track and verify ownership
-    const track = await Track.findOne({
-      _id: trackId,
-      artist: req.artist._id,
-      isExclusive: true
-    });
-
-    if (!track) {
-      return res.status(404).json({ message: 'Exclusive track not found or not owned by you' });
+    if (!isMember && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to update this content' });
     }
 
     // Update fields if provided
-    if (title) track.title = title;
-    if (genre) track.genre = genre;
-    if (minimumTier) track.minimumSupportTier = minimumTier;
-    if (description) track.description = description;
-    if (releaseDate) track.releaseDate = releaseDate;
-    if (trackNumber) track.trackNumber = trackNumber;
-    if (lyrics) track.lyrics = lyrics;
+    const updateFields = [
+      'title', 'description', 'contentType', 'releaseDate',
+      'minimumTierRequired', 'isPublic', 'expiresAt', 'tags'
+    ];
 
-    // Upload new audio file if provided
-    if (req.files.audio) {
-      track.audioUrl = await uploadToS3(req.files.audio[0], 'exclusive-tracks');
+    updateFields.forEach(field => {
+      if (req.body[field] !== undefined) {
+        // Parse tags if needed
+        if (field === 'tags') {
+          content[field] = typeof req.body[field] === 'string'
+            ? JSON.parse(req.body[field])
+            : req.body[field];
+        }
+        // Parse boolean fields
+        else if (field === 'isPublic') {
+          content[field] = req.body[field] === 'true' || req.body[field] === true;
+        }
+        // Parse dates
+        else if (field === 'releaseDate' || field === 'expiresAt') {
+          content[field] = req.body[field] ? new Date(req.body[field]) : content[field];
+        }
+        // All other fields
+        else {
+          content[field] = req.body[field];
+        }
+      }
+    });
+
+    // Handle file uploads
+    if (req.file) {
+      content.contentUrl = `/uploads/content/${req.file.filename}`;
+      content.fileSize = req.file.size;
+
+      if (req.body.duration) {
+        content.duration = req.body.duration;
+      }
+    } else if (req.body.contentUrl && req.body.contentUrl !== content.contentUrl) {
+      content.contentUrl = req.body.contentUrl;
     }
 
-    // Upload new cover art if provided
-    if (req.files.coverArt) {
-      track.coverArt = await uploadImageToS3(req.files.coverArt[0], 'track-covers');
+    // Handle thumbnail
+    if (req.body.thumbnailUrl && req.body.thumbnailUrl !== content.thumbnailUrl) {
+      content.thumbnailUrl = req.body.thumbnailUrl;
     }
 
-    await track.save();
+    await content.save();
 
-    res.json(track);
+    res.json(content);
   } catch (err) {
     console.error(err);
-    if (err.kind === 'ObjectId') {
-      return res.status(404).json({ message: 'Track not found' });
-    }
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Delete an exclusive track
-router.delete('/tracks/:id', [auth, artistAuth], async (req, res) => {
+// Delete exclusive content
+router.delete('/:id', auth, async (req, res) => {
   try {
-    const trackId = req.params.id;
+    const contentId = req.params.id;
 
-    // Find track and verify ownership
-    const track = await Track.findOne({
-      _id: trackId,
-      artist: req.artist._id,
-      isExclusive: true
-    });
-
-    if (!track) {
-      return res.status(404).json({ message: 'Exclusive track not found or not owned by you' });
+    // Find the content
+    const content = await ExclusiveContent.findById(contentId);
+    if (!content) {
+      return res.status(404).json({ message: 'Content not found' });
     }
 
-    await track.remove();
-
-    // Update artist's exclusive track count
-    await Artist.findByIdAndUpdate(
-      req.artist._id,
-      { $inc: { exclusiveTrackCount: -1 } }
+    // Check if user is authorized to delete
+    const artist = await Artist.findById(content.artist);
+    const isMember = artist.members.some(
+      member => member.userId.toString() === req.user.id
     );
 
-    res.json({ message: 'Exclusive track deleted successfully' });
+    if (!isMember && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to delete this content' });
+    }
+
+    await content.remove();
+
+    res.json({ message: 'Content deleted successfully' });
   } catch (err) {
     console.error(err);
-    if (err.kind === 'ObjectId') {
-      return res.status(404).json({ message: 'Track not found' });
-    }
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Apply to become a verified artist
-router.post('/apply', auth, async (req, res) => {
+// Record a content download
+router.post('/:id/download', auth, checkSubscriptionAccess, async (req, res) => {
   try {
-    const { artistName, genre, bio } = req.body;
+    // Increment download count
+    req.content.downloadCount += 1;
+    await req.content.save();
 
-    if (!artistName) {
-      return res.status(400).json({ message: 'Artist name is required' });
-    }
-
-    // Check if user already has an artist profile
-    const user = await User.findById(req.user.id);
-
-    if (user.artist) {
-      // Update existing artist profile with verification application
-      await Artist.findByIdAndUpdate(user.artist, {
-        $set: {
-          verificationStatus: 'pending',
-          name: artistName,
-          genres: genre ? genre.split(',').map(g => g.trim()) : [],
-          bio: bio || ''
-        }
-      });
-
-      return res.json({ message: 'Artist verification application submitted successfully' });
-    }
-
-    // Create new artist profile with pending verification status
-    const newArtist = new Artist({
-      name: artistName,
-      user: req.user.id,
-      genres: genre ? genre.split(',').map(g => g.trim()) : [],
-      bio: bio || '',
-      isVerified: false,
-      trackCount: 0,
-      exclusiveTrackCount: 0,
-      followerCount: 0,
-      supporterCount: 0,
-      verificationStatus: 'pending'
-    });
-
-    await newArtist.save();
-
-    // Update user with artist reference
-    user.artist = newArtist._id;
-    await user.save();
-
-    res.status(201).json({
-      message: 'Artist profile created and verification application submitted successfully',
-      artist: newArtist
+    res.json({
+      message: 'Download recorded',
+      downloadUrl: req.content.contentUrl
     });
   } catch (err) {
     console.error(err);

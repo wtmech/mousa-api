@@ -49,6 +49,10 @@ const userSchema = new mongoose.Schema({
     created: [{  // User-created playlists
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Playlist'
+    }],
+    folders: [{  // User-created playlist folders
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PlaylistFolder'
     }]
   },
   following: {
@@ -65,6 +69,47 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Payment and subscription details
+  paymentMethods: [{
+    provider: String, // e.g., 'stripe', 'paypal'
+    token: String,    // Payment token or ID
+    last4: String,    // Last 4 digits (for display)
+    expiry: String,   // MM/YY format
+    isDefault: Boolean,
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  // User preferences and settings
+  preferences: {
+    emailNotifications: {
+      newReleases: {
+        type: Boolean,
+        default: true
+      },
+      artistUpdates: {
+        type: Boolean,
+        default: true
+      },
+      exclusiveContent: {
+        type: Boolean,
+        default: true
+      },
+      subscriptionRenewals: {
+        type: Boolean,
+        default: true
+      }
+    },
+    appNotifications: {
+      type: Boolean,
+      default: true
+    },
+    darkMode: {
+      type: Boolean,
+      default: false
+    }
+  },
   recentlyPlayed: [{
     track: {
       type: mongoose.Schema.Types.ObjectId,
@@ -78,6 +123,10 @@ const userSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
   }
 });
 
@@ -88,6 +137,7 @@ userSchema.pre('save', async function(next) {
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
+    this.updatedAt = Date.now();
     next();
   } catch (error) {
     next(error);
@@ -98,5 +148,12 @@ userSchema.pre('save', async function(next) {
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
+
+// Virtual for user subscriptions
+userSchema.virtual('subscriptions', {
+  ref: 'UserSubscription',
+  localField: '_id',
+  foreignField: 'user'
+});
 
 module.exports = mongoose.model('User', userSchema);

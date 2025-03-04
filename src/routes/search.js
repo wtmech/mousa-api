@@ -5,6 +5,7 @@ const Track = require('../models/Track');
 const Artist = require('../models/Artist');
 const Album = require('../models/Album');
 const Playlist = require('../models/Playlist');
+const PlaylistFolder = require('../models/PlaylistFolder');
 const User = require('../models/User');
 const { searchTracks } = require('../utils/lastfm');
 
@@ -59,76 +60,46 @@ router.get('/', auth, async (req, res) => {
       .populate('artist', 'name')
       .limit(limit);
 
-    // Search playlists (only public ones)
+    // Search playlists
     const playlists = await Playlist.find({
-      name: regexSearch,
-      isPublic: true
+      $and: [
+        { isPublic: true },
+        { $or: [
+          { name: regexSearch },
+          { description: regexSearch }
+        ]}
+      ]
     })
       .populate('owner', 'username')
+      .populate('folder', 'name')
+      .limit(limit);
+      
+    // Search playlist folders
+    const folders = await PlaylistFolder.find({
+      $and: [
+        { isPublic: true },
+        { $or: [
+          { name: regexSearch },
+          { description: regexSearch }
+        ]}
+      ]
+    })
+      .populate('owner', 'username')
+      .populate('parentFolder', 'name')
       .limit(limit);
 
     // Search users
-    const users = await User.find({
-      $or: [
-        { username: regexSearch },
-        { firstName: regexSearch },
-        { lastName: regexSearch }
-      ]
-    })
+    const users = await User.find({ username: regexSearch })
       .select('username firstName lastName')
       .limit(limit);
 
-    // Get total counts for each type
-    const trackCount = await Track.countDocuments({
-      $or: [
-        { title: regexSearch },
-        { genre: regexSearch }
-      ]
-    });
-
-    const artistCount = await Artist.countDocuments({ name: regexSearch });
-
-    const albumCount = await Album.countDocuments({
-      $or: [
-        { title: regexSearch },
-        { genre: regexSearch }
-      ]
-    });
-
-    const playlistCount = await Playlist.countDocuments({
-      name: regexSearch,
-      isPublic: true
-    });
-
-    const userCount = await User.countDocuments({
-      $or: [
-        { username: regexSearch },
-        { firstName: regexSearch },
-        { lastName: regexSearch }
-      ]
-    });
-
     res.json({
-      tracks: {
-        items: tracks,
-        total: trackCount
-      },
-      artists: {
-        items: artists,
-        total: artistCount
-      },
-      albums: {
-        items: albums,
-        total: albumCount
-      },
-      playlists: {
-        items: playlists,
-        total: playlistCount
-      },
-      users: {
-        items: users,
-        total: userCount
-      }
+      tracks,
+      artists,
+      albums,
+      playlists,
+      folders,
+      users
     });
   } catch (err) {
     console.error(err);

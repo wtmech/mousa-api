@@ -19,6 +19,15 @@ const playlistSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  color: {
+    type: String,
+    default: '#1DB954'
+  },
+  folder: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlaylistFolder',
+    default: null
+  },
   tracks: [{
     track: {
       type: mongoose.Schema.Types.ObjectId,
@@ -63,5 +72,11 @@ const playlistSchema = new mongoose.Schema({
 
 // Index for search
 playlistSchema.index({ name: 'text', description: 'text' });
+
+// Pre-save hook to validate color format
+playlistSchema.path('color').validate(function(color) {
+  const hexColorRegex = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
+  return hexColorRegex.test(color);
+}, 'Invalid hex color format');
 
 module.exports = mongoose.model('Playlist', playlistSchema);
